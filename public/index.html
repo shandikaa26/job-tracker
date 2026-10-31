@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>JobTracker — Lacak Lamaran Kerja Otomatis dengan AI</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+  <!-- Toast Container -->
+  <div id="toastContainer" class="toast-container"></div>
+
+  <!-- Header -->
+  <header class="header">
+    <div class="header-inner">
+      <div class="logo">
+        <div class="logo-icon"><i class="fas fa-rocket"></i></div>
+        <div>
+          <h1>JobTracker</h1>
+          <p class="tagline">Auto-Extract Teks & Gambar Lowongan + Tracking Progress</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button class="btn btn-outline-light" id="openSettingsBtn" onclick="openModal('settingsModal')">
+          <i class="fas fa-key"></i>
+          <span>API Key Gemini</span>
+          <span class="status-indicator" id="apiKeyIndicator" title="Cek status API"></span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="container">
+
+    <!-- API Key Notice Banner (Conditional) -->
+    <div id="apiKeyBanner" class="api-notice-banner hidden">
+      <div class="api-notice-content">
+        <i class="fas fa-info-circle"></i>
+        <span><strong>Gemini API Key belum terpasang.</strong> Masukkan API Key gratis dari Google AI Studio untuk mengaktifkan fitur auto-extract otomatis dari teks & gambar lowongan.</span>
+      </div>
+      <button class="btn btn-sm btn-primary" onclick="openModal('settingsModal')">Pasang API Key</button>
+    </div>
+
+    <!-- Stats Row -->
+    <section class="stats-grid" id="statsGrid"></section>
+
+    <!-- Action Bar -->
+    <section class="action-bar">
+      <div class="action-left">
+        <button class="btn btn-primary btn-lg" id="addJobBtn">
+          <i class="fas fa-plus"></i> Tambah Lamaran
+        </button>
+
+        <!-- View Switcher -->
+        <div class="view-switch">
+          <button class="view-btn active" id="viewGridBtn" onclick="switchView('grid')" title="Tampilan Kartu">
+            <i class="fas fa-grip"></i> Kartu
+          </button>
+          <button class="view-btn" id="viewKanbanBtn" onclick="switchView('kanban')" title="Tampilan Papan Kanban">
+            <i class="fas fa-table-columns"></i> Kanban Board
+          </button>
+        </div>
+      </div>
+
+      <div class="search-filter">
+        <div class="search-box">
+          <i class="fas fa-search"></i>
+          <input type="text" id="searchInput" placeholder="Cari perusahaan, posisi, lokasi...">
+        </div>
+        <select id="filterStatus" class="filter-select">
+          <option value="all">Semua Status</option>
+          <option value="Applied">Applied (Terkirim)</option>
+          <option value="Screening">Screening (Review CV)</option>
+          <option value="Phone Interview">Phone Interview</option>
+          <option value="Technical Test">Technical Test</option>
+          <option value="Interview">Interview HR / User</option>
+          <option value="Final Interview">Final Interview</option>
+          <option value="Offering">Offering</option>
+          <option value="Accepted">Accepted (Diterima)</option>
+          <option value="Rejected">Rejected (Ditolak)</option>
+        </select>
+      </div>
+    </section>
+
+    <!-- Jobs Container -->
+    <section id="jobsContainer">
+      <!-- Grid View -->
+      <div id="jobsGrid" class="jobs-grid"></div>
+
+      <!-- Kanban View -->
+      <div id="kanbanBoard" class="kanban-board hidden"></div>
+
+      <!-- Empty State -->
+      <div id="emptyState" class="empty-state">
+        <div class="empty-icon"><i class="fas fa-inbox"></i></div>
+        <h3>Belum ada lamaran tersimpan</h3>
+        <p>Tambah lamaran baru dengan paste teks atau upload gambar screenshot lowongan kerja.<br>AI akan mengekstrak detailnya otomatis!</p>
+        <div class="empty-actions">
+          <button class="btn btn-primary" onclick="openAddModal()">
+            <i class="fas fa-plus"></i> Tambah Lamaran
+          </button>
+          <button class="btn btn-secondary" onclick="seedSampleData()">
+            <i class="fas fa-magic"></i> Muat Contoh Data (5 Lowongan)
+          </button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ═══════════ Add / Edit Job Modal ═══════════ -->
+  <div id="jobModal" class="modal-overlay" onclick="handleOverlayClick(event, 'jobModal')">
+    <div class="modal modal-lg">
+      <div class="modal-header">
+        <h2 id="modalTitle"><i class="fas fa-plus-circle"></i> Tambah Lamaran</h2>
+        <button class="close-btn" onclick="closeModal('jobModal')">&times;</button>
+      </div>
+      <div class="modal-body">
+
+        <!-- Input Method Tabs -->
+        <div class="tabs" id="inputTabs">
+          <button class="tab active" data-tab="text" onclick="switchTab('text')">
+            <i class="fas fa-paste"></i> 1. Paste Teks Lowongan
+          </button>
+          <button class="tab" data-tab="image" onclick="switchTab('image')">
+            <i class="fas fa-image"></i> 2. Upload Screenshot Gambar
+          </button>
+          <button class="tab" data-tab="manual" onclick="switchTab('manual')">
+            <i class="fas fa-edit"></i> 3. Input Manual
+          </button>
+        </div>
+
+        <!-- Text Input Pane -->
+        <div id="textPane" class="tab-pane active">
+          <div class="ai-banner-tip">
+            <i class="fas fa-wand-magic-sparkles"></i>
+            <div>
+              <strong>Ekstrak Otomatis:</strong> Paste deskripsi lowongan kerja dari LinkedIn, Glints, Jobstreet, atau email. AI akan mengisi otomatis formulir di bawah.
+            </div>
+          </div>
+          <textarea id="jobText" rows="6" placeholder="Paste isi lowongan pekerjaan di sini...&#10;&#10;Contoh:&#10;PT Tokopedia mencari Backend Engineer (Go/Node.js). Lokasi: Jakarta (Hybrid). Gaji: Rp 20 - 30 Juta/bulan. Bertanggung jawab atas scalability microservices payment gateway..."></textarea>
+          <button class="btn btn-ai" id="extractTextBtn" onclick="handleExtractText()">
+            <i class="fas fa-wand-magic-sparkles"></i> Ekstrak Otomatis dengan AI
+          </button>
+        </div>
+
+        <!-- Image Input Pane -->
+        <div id="imagePane" class="tab-pane">
+          <div class="ai-banner-tip">
+            <i class="fas fa-image"></i>
+            <div>
+              <strong>Ekstrak dari Gambar:</strong> Upload screenshot poster lowongan atau foto flyer info loker. AI Vision akan membaca teksnya dan mengisi data otomatis.
+            </div>
+          </div>
+          <div class="upload-area" id="uploadArea">
+            <input type="file" id="imageInput" accept="image/*">
+            <div class="upload-content">
+              <i class="fas fa-cloud-upload-alt"></i>
+              <p>Drag & drop screenshot loker atau <strong>klik untuk memilih file</strong></p>
+              <span class="upload-hint">Format didukung: PNG, JPG, JPEG, WEBP (Maksimal 10MB)</span>
+            </div>
+          </div>
+          <div id="imagePreview" class="image-preview hidden">
+            <img id="previewImg" src="" alt="Preview Lowongan">
+            <div>
+              <button class="btn btn-sm btn-outline-danger" onclick="clearImage()">
+                <i class="fas fa-times"></i> Ganti Gambar
+              </button>
+            </div>
+          </div>
+          <button class="btn btn-ai" id="extractImageBtn" onclick="handleExtractImage()">
+            <i class="fas fa-wand-magic-sparkles"></i> Ekstrak Otomatis dari Gambar
+          </button>
+        </div>
+
+        <!-- Manual Pane -->
+        <div id="manualPane" class="tab-pane">
+          <div class="manual-hint">
+            <i class="fas fa-info-circle"></i>
+            Silakan lengkapi formulir detail lamaran pekerjaan di bawah secara manual.
+          </div>
+        </div>
+
+        <!-- Divider -->
+        <div class="form-divider" id="formDivider">
+          <span>Detail Informasi Lamaran</span>
+        </div>
+
+        <!-- Job Form -->
+        <form id="jobForm" class="job-form">
+          <div class="form-grid">
+            <div class="form-group">
+              <label><i class="fas fa-building"></i> Perusahaan <span class="required">*</span></label>
+              <input type="text" name="company" required placeholder="Contoh: PT GoTo Gojek Tokopedia">
+            </div>
+            <div class="form-group">
+              <label><i class="fas fa-user-tie"></i> Posisi / Jabatan <span class="required">*</span></label>
+              <input type="text" name="position" required placeholder="Contoh: Frontend Developer">
+            </div>
+            <div class="form-group">
+              <label><i class="fas fa-map-marker-alt"></i> Lokasi</label>
+              <input type="text" name="location" placeholder="Contoh: Jakarta / Remote / Hybrid">
+            </div>
+            <div class="form-group">
+              <label><i class="fas fa-money-bill-wave"></i> Gaji (Opsional)</label>
+              <input type="text" name="salary" placeholder="Contoh: Rp 15.000.000 - Rp 25.000.000">
+            </div>
+            <div class="form-group">
+              <label><i class="fas fa-clock"></i> Tipe Pekerjaan</label>
+              <select name="job_type">
+                <option value="">Pilih Tipe</option>
+                <option value="Full-time">Full-time</option>
+                <option value="Part-time">Part-time</option>
+                <option value="Contract">Contract</option>
+                <option value="Freelance">Freelance</option>
+                <option value="Internship">Internship (Magang)</option>
+                <option value="Remote">Remote</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label><i class="fas fa-globe"></i> Sumber Info</label>
+              <input type="text" name="source" placeholder="Contoh: LinkedIn, Jobstreet, Glints, Rekan">
+            </div>
+            <div class="form-group">
+              <label><i class="fas fa-link"></i> URL Link Lowongan</label>
+              <input type="url" name="url" placeholder="https://...">
+            </div>
+            <div class="form-group">
+              <label><i class="fas fa-calendar"></i> Tanggal Melamar</label>
+              <input type="date" name="applied_date">
+            </div>
+            <div class="form-group full-width">
+              <label><i class="fas fa-diagram-project"></i> Tahap Progress Saat Ini</label>
+              <select name="status" id="formStatusSelect">
+                <option value="Applied">1. Applied (Sudah Kirim Lamaran)</option>
+                <option value="Screening">2. Screening (Review CV)</option>
+                <option value="Phone Interview">3. Phone Interview (HR Call)</option>
+                <option value="Technical Test">4. Technical Test (Coding / Skill Test)</option>
+                <option value="Interview">5. Interview (User / Manager)</option>
+                <option value="Final Interview">6. Final Interview (Direksi / C-Level)</option>
+                <option value="Offering">7. Offering (Negosiasi Gaji / Kontrak)</option>
+                <option value="Accepted">8. Accepted (Diterima 🎉)</option>
+                <option value="Rejected">9. Rejected (Belum Berjodoh)</option>
+              </select>
+            </div>
+            <div class="form-group full-width">
+              <label><i class="fas fa-align-left"></i> Ringkasan Deskripsi Lowongan</label>
+              <textarea name="description" rows="2" placeholder="Deskripsi ringkas tanggung jawab atau kualifikasi"></textarea>
+            </div>
+            <div class="form-group full-width">
+              <label><i class="fas fa-sticky-note"></i> Catatan Khusus Saya</label>
+              <textarea name="notes" rows="2" placeholder="Contoh: Kontak HR Mbak Sarah, sudah kirim portofolio figma via email..."></textarea>
+            </div>
+          </div>
+          <div class="form-actions">
+            <button type="button" class="btn btn-secondary" onclick="closeModal('jobModal')">Batal</button>
+            <button type="submit" class="btn btn-primary">
+              <i class="fas fa-save"></i> <span id="submitBtnText">Simpan Lamaran</span>
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════ Detail Modal ═══════════ -->
+  <div id="detailModal" class="modal-overlay" onclick="handleOverlayClick(event, 'detailModal')">
+    <div class="modal modal-lg">
+      <div class="modal-header">
+        <h2><i class="fas fa-file-alt"></i> Detail Lengkap Lamaran</h2>
+        <button class="close-btn" onclick="closeModal('detailModal')">&times;</button>
+      </div>
+      <div class="modal-body" id="detailContent"></div>
+    </div>
+  </div>
+
+  <!-- ═══════════ API Key Settings Modal ═══════════ -->
+  <div id="settingsModal" class="modal-overlay" onclick="handleOverlayClick(event, 'settingsModal')">
+    <div class="modal">
+      <div class="modal-header">
+        <h2><i class="fas fa-key"></i> Pengaturan API Key Gemini</h2>
+        <button class="close-btn" onclick="closeModal('settingsModal')">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="settings-desc">
+          Fitur auto-extract lowongan dari teks & gambar menggunakan model AI <strong>Google Gemini Flash</strong>.
+        </p>
+
+        <div class="api-guide-box">
+          <h4><i class="fas fa-lightbulb"></i> Cara Mendapatkan API Key Gratis:</h4>
+          <ol>
+            <li>Buka website <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio (Klik di sini) <i class="fas fa-external-link-alt"></i></a></li>
+            <li>Login dengan akun Google kamu.</li>
+            <li>Klik tombol <strong>"Create API Key"</strong>.</li>
+            <li>Salin key (dimulai dengan <code>AIzaSy...</code>) dan tempel di bawah ini.</li>
+          </ol>
+        </div>
+
+        <form id="settingsForm" onsubmit="saveApiKey(event)">
+          <div class="form-group" style="margin-top: 1rem;">
+            <label for="geminiApiKeyInput"><strong>Google Gemini API Key</strong></label>
+            <div class="input-with-action">
+              <input type="password" id="geminiApiKeyInput" placeholder="Masukkan API Key (AIzaSy...)" required>
+              <button type="button" class="btn-toggle-visibility" onclick="toggleApiKeyVisibility()" title="Lihat / Sembunyikan Key">
+                <i class="fas fa-eye" id="toggleKeyIcon"></i>
+              </button>
+            </div>
+            <small class="text-muted" id="apiKeyStatusText">Status: Memeriksa...</small>
+          </div>
+
+          <div class="form-actions" style="margin-top: 1.5rem;">
+            <button type="button" class="btn btn-secondary" onclick="closeModal('settingsModal')">Tutup</button>
+            <button type="submit" class="btn btn-primary">
+              <i class="fas fa-check"></i> Simpan API Key
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════ Delete Confirmation Modal ═══════════ -->
+  <div id="deleteModal" class="modal-overlay" onclick="handleOverlayClick(event, 'deleteModal')">
+    <div class="modal modal-sm">
+      <div class="modal-header modal-header-danger">
+        <h2><i class="fas fa-exclamation-triangle"></i> Konfirmasi Hapus</h2>
+        <button class="close-btn" onclick="closeModal('deleteModal')">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="delete-message">Yakin ingin menghapus data lamaran ini dari catatan kamu? Tindakan ini permanen.</p>
+        <div class="delete-job-info" id="deleteJobInfo"></div>
+        <div class="form-actions">
+          <button class="btn btn-secondary" onclick="closeModal('deleteModal')">Batal</button>
+          <button class="btn btn-danger" id="confirmDeleteBtn">
+            <i class="fas fa-trash"></i> Hapus
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Loading Overlay -->
+  <div id="loadingOverlay" class="loading-overlay hidden">
+    <div class="loading-content">
+      <div class="spinner"></div>
+      <p id="loadingText">AI sedang membaca dan mengekstrak info lowongan...</p>
+    </div>
+  </div>
+
+  <script src="/js/app.js"></script>
+</body>
+</html>
