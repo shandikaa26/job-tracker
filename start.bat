@@ -1,26 +1,22 @@
 @echo off
-title Job Tracker - Auto AI Loker
+title Job Tracker - Python Flask (FPEB UPI)
 echo ===================================================
-echo     🚀 Menjalankan Job Tracker AI Website...
+echo     🚀 Menjalankan Job Tracker (Python Flask)...
+echo     Sesuai Materi Kuliah FPEB UPI - Port 8000
 echo ===================================================
 cd /d "%~dp0"
 
-where node >nul 2>nul
+where python >nul 2>nul
 if %errorlevel% neq 0 (
-    echo [ERROR] Node.js belum terpasang di komputer ini!
-    echo Silakan install Node.js terlebih dahulu dari https://nodejs.org/
+    echo [ERROR] Python belum terpasang di komputer ini!
+    echo Silakan install Python terlebih dahulu dari https://python.org/
     pause
     exit /b
 )
 
-if not exist "node_modules" (
-    echo Menginstall dependencies...
-    npm install
-)
+echo Membuka browser http://localhost:8000...
+start http://localhost:8000
 
-echo Membuka browser http://localhost:3000...
-start http://localhost:3000
-
-echo Menjalankan server...
-node server.js
+echo Menjalankan server Flask...
+python app.py
 pause
