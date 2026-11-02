@@ -34,6 +34,13 @@ SQLITE_PATH = os.path.join(os.path.dirname(__file__), 'jobs.db')
 
 DETECTED_ENGINE = None
 
+# ─── Global Error Handler (Always JSON, never HTML 500) ─────
+@app.errorhandler(Exception)
+def handle_global_error(e):
+    import traceback
+    traceback.print_exc()
+    return jsonify({"error": str(e)}), 500
+
 # ─── Database Layer (MySQL with SQLite Fallback) ────────────
 def detect_database_engine():
     global DETECTED_ENGINE
@@ -97,7 +104,7 @@ def init_db():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS jobs (
                 id INT AUTO_INCREMENT PRIMARY KEY,
-                user_id INT NOT NULL,
+                user_id INT NOT NULL DEFAULT 1,
                 company VARCHAR(150) NOT NULL,
                 position VARCHAR(150) NOT NULL,
                 location VARCHAR(100) DEFAULT '',
@@ -114,6 +121,13 @@ def init_db():
                 INDEX (user_id)
             );
         """)
+        # Auto-migration if user_id is missing in MySQL
+        try:
+            cursor.execute("ALTER TABLE jobs ADD COLUMN user_id INT NOT NULL DEFAULT 1")
+            print("[MIGRATE] user_id ditambahkan ke MySQL jobs")
+        except Exception:
+            pass
+
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS status_history (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -125,12 +139,18 @@ def init_db():
         """)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS settings (
-                user_id INT NOT NULL,
-                `key` VARCHAR(100) NOT NULL,
-                `value` TEXT,
-                PRIMARY KEY (user_id, `key`)
+                `key` VARCHAR(100) PRIMARY KEY,
+                `value` TEXT
             );
         """)
+
+        # Ensure default user 1 exists
+        cursor.execute("SELECT id FROM users WHERE id = 1")
+        if not cursor.fetchone():
+            default_hash = generate_password_hash("password123")
+            cursor.execute("INSERT INTO users (id, name, email, password_hash) VALUES (1, %s, %s, %s)",
+                           ("Demo User", "demo@jobtracker.com", default_hash))
+
         conn.close()
         print(f"[OK] Database MySQL ({DB_NAME}) terhubung!")
     else:
@@ -144,7 +164,7 @@ def init_db():
             );
             CREATE TABLE IF NOT EXISTS jobs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL DEFAULT 1,
                 company TEXT NOT NULL,
                 position TEXT NOT NULL,
                 location TEXT DEFAULT '',
@@ -167,12 +187,25 @@ def init_db():
                 FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
             );
             CREATE TABLE IF NOT EXISTS settings (
-                user_id INTEGER NOT NULL,
-                key TEXT NOT NULL,
-                value TEXT,
-                PRIMARY KEY (user_id, key)
+                key TEXT PRIMARY KEY,
+                value TEXT
             );
         """)
+
+        # Auto-migration if user_id is missing in SQLite
+        try:
+            cursor.execute("ALTER TABLE jobs ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1")
+            print("[MIGRATE] user_id ditambahkan ke SQLite jobs")
+        except Exception:
+            pass
+
+        # Ensure default user 1 exists
+        cursor.execute("SELECT id FROM users WHERE id = 1")
+        if not cursor.fetchone():
+            default_hash = generate_password_hash("password123")
+            cursor.execute("INSERT INTO users (id, name, email, password_hash) VALUES (1, ?, ?, ?)",
+                           ("Demo User", "demo@jobtracker.com", default_hash))
+
         conn.commit()
         conn.close()
         print("[OK] Database SQLite (jobs.db) siap digunakan!")
@@ -211,6 +244,16 @@ def db_execute(query, params=()):
     conn.close()
     return last_id
 
+# ─── Data Serialization Helper ──────────────────────────────
+def serialize_job(job):
+    if not job:
+        return job
+    j = dict(job)
+    for key in ('applied_date', 'created_at', 'updated_at'):
+        if isinstance(j.get(key), (date, datetime)):
+            j[key] = str(j[key])
+    return j
+
 # ─── Auth Helper ────────────────────────────────────────────
 def get_current_user():
     user_id = session.get('user_id')
@@ -218,7 +261,7 @@ def get_current_user():
         return None
     return db_query_one("SELECT id, name, email, created_at FROM users WHERE id = ?", (user_id,))
 
-# ─── Gemini AI Service (REST API) ──────────────────────────
+# ─── Gemini AI Service (Centralized API Key) ────────────────
 EXTRACTION_PROMPT = """You are an expert job posting analyzer. Extract structured information from the provided job posting text or screenshot.
 Return ONLY a valid JSON object with the following fields:
 
@@ -244,24 +287,24 @@ CANDIDATE_MODELS = [
     'gemini-1.5-flash'
 ]
 
-def get_active_api_key(user_id=None):
-    if user_id:
-        try:
-            row = db_query_one("SELECT value FROM settings WHERE user_id = ? AND `key` = 'gemini_api_key'", (user_id,))
-            if row and row.get('value') and len(row['value'].strip()) > 5:
-                return row['value'].strip()
-        except Exception:
-            pass
-
+def get_active_api_key():
+    # Centralized API Key from environment or database settings
     env_key = os.environ.get('GEMINI_API_KEY', '').strip()
     if env_key and env_key != 'your_gemini_api_key_here':
         return env_key
+
+    try:
+        row = db_query_one("SELECT value FROM settings WHERE `key` = 'gemini_api_key' LIMIT 1")
+        if row and row.get('value') and len(row['value'].strip()) > 5:
+            return row['value'].strip()
+    except Exception:
+        pass
     return None
 
-def call_gemini_api(contents_payload, user_id=None):
-    api_key = get_active_api_key(user_id)
+def call_gemini_api(contents_payload):
+    api_key = get_active_api_key()
     if not api_key:
-        raise ValueError("API Key Gemini belum diset. Silakan masukkan API Key di menu Pengaturan.")
+        raise ValueError("API Key Gemini belum diset oleh admin server di file .env")
 
     last_error = None
     for model_name in CANDIDATE_MODELS:
@@ -357,54 +400,6 @@ def auth_me():
         "user": {"id": user['id'], "name": user['name'], "email": user['email']}
     })
 
-# ─── Routes: Settings API (Personalized) ────────────────────
-@app.route('/api/jobs/settings', methods=['GET'])
-def get_settings():
-    user = get_current_user()
-    user_id = user['id'] if user else None
-    current_key = get_active_api_key(user_id)
-    masked = ''
-    if current_key:
-        masked = f"{current_key[:4]}...{current_key[-4:]}" if len(current_key) > 8 else "••••••••"
-    return jsonify({
-        "hasKey": bool(current_key),
-        "maskedKey": masked
-    })
-
-@app.route('/api/jobs/settings', methods=['POST'])
-def save_settings():
-    user = get_current_user()
-    if not user:
-        return jsonify({"error": "Silakan login terlebih dahulu"}), 401
-
-    data = request.get_json() or {}
-    api_key = data.get('apiKey', '').strip()
-    if not api_key:
-        return jsonify({"error": "API Key wajib diisi"}), 400
-
-    conn, engine = get_db_connection()
-    cursor = conn.cursor()
-    if engine == 'mysql':
-        cursor.execute("""
-            INSERT INTO settings (user_id, `key`, `value`) VALUES (%s, 'gemini_api_key', %s)
-            ON DUPLICATE KEY UPDATE `value` = VALUES(`value`)
-        """, (user['id'], api_key))
-    else:
-        cursor.execute("""
-            INSERT INTO settings (user_id, key, value) VALUES (?, 'gemini_api_key', ?)
-            ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value
-        """, (user['id'], api_key))
-        conn.commit()
-    conn.close()
-
-    masked = f"{api_key[:4]}...{api_key[-4:]}" if len(api_key) > 8 else "••••••••"
-    return jsonify({
-        "success": True,
-        "message": "API Key Gemini tersimpan untuk akun Anda!",
-        "hasKey": True,
-        "maskedKey": masked
-    })
-
 # ─── Routes: Statistics (Personalized) ──────────────────────
 @app.route('/api/jobs/stats', methods=['GET'])
 def get_stats():
@@ -471,15 +466,8 @@ def list_jobs():
         query += " ORDER BY id DESC"
 
     jobs = db_query_all(query, tuple(params))
-    for job in jobs:
-        if isinstance(job.get('applied_date'), (date, datetime)):
-            job['applied_date'] = str(job['applied_date'])
-        if isinstance(job.get('created_at'), (date, datetime)):
-            job['created_at'] = str(job['created_at'])
-        if isinstance(job.get('updated_at'), (date, datetime)):
-            job['updated_at'] = str(job['updated_at'])
-
-    return jsonify(jobs)
+    serialized = [serialize_job(j) for j in jobs]
+    return jsonify(serialized)
 
 # ─── Routes: Job Detail ─────────────────────────────────────
 @app.route('/api/jobs/<int:job_id>', methods=['GET'])
@@ -497,22 +485,16 @@ def get_job(job_id):
         if isinstance(h.get('changed_at'), (date, datetime)):
             h['changed_at'] = str(h['changed_at'])
 
-    if isinstance(job.get('applied_date'), (date, datetime)):
-        job['applied_date'] = str(job['applied_date'])
-    if isinstance(job.get('created_at'), (date, datetime)):
-        job['created_at'] = str(job['created_at'])
-    if isinstance(job.get('updated_at'), (date, datetime)):
-        job['updated_at'] = str(job['updated_at'])
-
-    job['history'] = history
-    return jsonify(job)
+    job_data = serialize_job(job)
+    job_data['history'] = history
+    return jsonify(job_data)
 
 # ─── Routes: Create Job ─────────────────────────────────────
 @app.route('/api/jobs', methods=['POST'])
 def create_job():
     user = get_current_user()
-    if not user:
-        return jsonify({"error": "Silakan login terlebih dahulu"}), 401
+    # If session is lost or user not logged in, fallback to default user (id 1)
+    user_id = user['id'] if user else 1
 
     data = request.get_json() or {}
     company = data.get('company', '').strip()
@@ -527,7 +509,7 @@ def create_job():
         INSERT INTO jobs (user_id, company, position, location, salary, job_type, description, source, url, status, notes, applied_date)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
-        user['id'], company, position,
+        user_id, company, position,
         data.get('location', ''),
         data.get('salary', ''),
         data.get('job_type', ''),
@@ -541,16 +523,15 @@ def create_job():
 
     db_execute("INSERT INTO status_history (job_id, status) VALUES (?, ?)", (last_id, status))
     job = db_query_one("SELECT * FROM jobs WHERE id = ?", (last_id,))
-    return jsonify(job), 201
+    return jsonify(serialize_job(job)), 201
 
 # ─── Routes: Update Job ─────────────────────────────────────
 @app.route('/api/jobs/<int:job_id>', methods=['PUT'])
 def update_job(job_id):
     user = get_current_user()
-    if not user:
-        return jsonify({"error": "Silakan login terlebih dahulu"}), 401
+    user_id = user['id'] if user else 1
 
-    existing = db_query_one("SELECT * FROM jobs WHERE id = ? AND user_id = ?", (job_id, user['id']))
+    existing = db_query_one("SELECT * FROM jobs WHERE id = ? AND user_id = ?", (job_id, user_id))
     if not existing:
         return jsonify({"error": "Lamaran tidak ditemukan"}), 404
 
@@ -577,20 +558,19 @@ def update_job(job_id):
         data.get('notes', existing['notes']),
         data.get('applied_date', existing['applied_date']),
         job_id,
-        user['id']
+        user_id
     ))
 
     updated = db_query_one("SELECT * FROM jobs WHERE id = ?", (job_id,))
-    return jsonify(updated)
+    return jsonify(serialize_job(updated))
 
 # ─── Routes: Status Patch ───────────────────────────────────
 @app.route('/api/jobs/<int:job_id>/status', methods=['PATCH'])
 def patch_status(job_id):
     user = get_current_user()
-    if not user:
-        return jsonify({"error": "Silakan login terlebih dahulu"}), 401
+    user_id = user['id'] if user else 1
 
-    existing = db_query_one("SELECT * FROM jobs WHERE id = ? AND user_id = ?", (job_id, user['id']))
+    existing = db_query_one("SELECT * FROM jobs WHERE id = ? AND user_id = ?", (job_id, user_id))
     if not existing:
         return jsonify({"error": "Lamaran tidak ditemukan"}), 404
 
@@ -600,54 +580,44 @@ def patch_status(job_id):
         return jsonify({"error": "Status wajib diisi"}), 400
 
     db_execute("INSERT INTO status_history (job_id, status) VALUES (?, ?)", (job_id, new_status))
-    db_execute("UPDATE jobs SET status = ? WHERE id = ? AND user_id = ?", (new_status, job_id, user['id']))
+    db_execute("UPDATE jobs SET status = ? WHERE id = ? AND user_id = ?", (new_status, job_id, user_id))
 
     updated = db_query_one("SELECT * FROM jobs WHERE id = ?", (job_id,))
-    return jsonify(updated)
+    return jsonify(serialize_job(updated))
 
 # ─── Routes: Delete Job ─────────────────────────────────────
 @app.route('/api/jobs/<int:job_id>', methods=['DELETE'])
 def delete_job(job_id):
     user = get_current_user()
-    if not user:
-        return jsonify({"error": "Silakan login terlebih dahulu"}), 401
+    user_id = user['id'] if user else 1
 
-    existing = db_query_one("SELECT * FROM jobs WHERE id = ? AND user_id = ?", (job_id, user['id']))
+    existing = db_query_one("SELECT * FROM jobs WHERE id = ? AND user_id = ?", (job_id, user_id))
     if not existing:
         return jsonify({"error": "Lamaran tidak ditemukan"}), 404
 
     db_execute("DELETE FROM status_history WHERE job_id = ?", (job_id,))
-    db_execute("DELETE FROM jobs WHERE id = ? AND user_id = ?", (job_id, user['id']))
+    db_execute("DELETE FROM jobs WHERE id = ? AND user_id = ?", (job_id, user_id))
     return jsonify({"message": "Lamaran berhasil dihapus"})
 
 # ─── Routes: AI Extraction (Text & Image) ───────────────────
 @app.route('/api/jobs/extract-text', methods=['POST'])
 def extract_text():
-    user = get_current_user()
-    user_id = user['id'] if user else None
-
     data = request.get_json() or {}
     text = data.get('text', '').strip()
     if not text:
         return jsonify({"error": "Teks lowongan tidak boleh kosong"}), 400
 
-    try:
-        contents = [{
-            "parts": [
-                {"text": EXTRACTION_PROMPT},
-                {"text": f"\n\nJob Posting Content:\n{text}"}
-            ]
-        }]
-        result = call_gemini_api(contents, user_id)
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    contents = [{
+        "parts": [
+            {"text": EXTRACTION_PROMPT},
+            {"text": f"\n\nJob Posting Content:\n{text}"}
+        ]
+    }]
+    result = call_gemini_api(contents)
+    return jsonify(result)
 
 @app.route('/api/jobs/extract-image', methods=['POST'])
 def extract_image():
-    user = get_current_user()
-    user_id = user['id'] if user else None
-
     if 'image' not in request.files:
         return jsonify({"error": "Silakan pilih file gambar"}), 400
 
@@ -655,33 +625,29 @@ def extract_image():
     if file.filename == '':
         return jsonify({"error": "Gambar belum dipilih"}), 400
 
-    try:
-        image_bytes = file.read()
-        mime_type = file.mimetype or 'image/png'
-        base64_str = base64.b64encode(image_bytes).decode('utf-8')
+    image_bytes = file.read()
+    mime_type = file.mimetype or 'image/png'
+    base64_str = base64.b64encode(image_bytes).decode('utf-8')
 
-        contents = [{
-            "parts": [
-                {"text": EXTRACTION_PROMPT},
-                {
-                    "inline_data": {
-                        "mime_type": mime_type,
-                        "data": base64_str
-                    }
+    contents = [{
+        "parts": [
+            {"text": EXTRACTION_PROMPT},
+            {
+                "inline_data": {
+                    "mime_type": mime_type,
+                    "data": base64_str
                 }
-            ]
-        }]
-        result = call_gemini_api(contents, user_id)
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+            }
+        ]
+    }]
+    result = call_gemini_api(contents)
+    return jsonify(result)
 
 # ─── Routes: Seed Demo Data (Personalized) ──────────────────
 @app.route('/api/jobs/seed', methods=['POST'])
 def seed_jobs():
     user = get_current_user()
-    if not user:
-        return jsonify({"error": "Silakan login terlebih dahulu"}), 401
+    user_id = user['id'] if user else 1
 
     sample_jobs = [
         {
@@ -756,7 +722,7 @@ def seed_jobs():
             INSERT INTO jobs (user_id, company, position, location, salary, job_type, description, source, url, status, notes, applied_date)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            user['id'], job['company'], job['position'], job['location'], job['salary'],
+            user_id, job['company'], job['position'], job['location'], job['salary'],
             job['job_type'], job['description'], job['source'], job['url'],
             job['status'], job['notes'], job['applied_date']
         ))

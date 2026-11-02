@@ -202,7 +202,23 @@ async function apiFetch(url, options = {}) {
     credentials: 'include',
     ...options
   });
-  const data = await res.json();
+  
+  let data;
+  const contentType = res.headers.get('content-type') || '';
+  if (contentType.includes('application/json')) {
+    data = await res.json();
+  } else {
+    const rawText = await res.text();
+    if (!res.ok) {
+      throw new Error(`Server Error (${res.status}): ${rawText.slice(0, 150)}`);
+    }
+    try {
+      data = JSON.parse(rawText);
+    } catch {
+      data = { raw: rawText };
+    }
+  }
+
   if (!res.ok) throw new Error(data.error || 'Terjadi kesalahan sistem');
   return data;
 }
@@ -320,77 +336,6 @@ async function handleLogout() {
   }
 }
 
-// ─── Settings & API Key ──────────────────────────────────
-
-async function checkApiKeyStatus() {
-  try {
-    const data = await apiFetch(`${API}/settings`);
-    apiKeyStatus = data;
-    const indicator = document.getElementById('apiKeyIndicator');
-    const banner = document.getElementById('apiKeyBanner');
-    const statusText = document.getElementById('apiKeyStatusText');
-    const input = document.getElementById('geminiApiKeyInput');
-
-    if (data.hasKey) {
-      indicator.classList.add('active');
-      indicator.title = 'API Key Gemini Aktif';
-      banner.classList.add('hidden');
-      statusText.innerHTML = `Status: <span style="color:var(--success)">✅ Terpasang (${escapeHtml(data.maskedKey)})</span>`;
-      input.placeholder = `Tersimpan: ${data.maskedKey} (Ketik baru jika ingin ganti)`;
-    } else {
-      indicator.classList.remove('active');
-      indicator.title = 'API Key Gemini Belum Dipasang';
-      banner.classList.remove('hidden');
-      statusText.innerHTML = `Status: <span style="color:var(--danger)">⚠️ Belum terpasang</span>`;
-      input.placeholder = 'Tempel API Key di sini (AIzaSy...)';
-    }
-  } catch (err) {
-    console.error('Failed to check API key:', err);
-  }
-}
-
-async function saveApiKey(e) {
-  e.preventDefault();
-  if (!currentUser) {
-    showToast('Silakan login terlebih dahulu untuk menyimpan API Key', 'error');
-    openAuthModal('login');
-    return;
-  }
-
-  const input = document.getElementById('geminiApiKeyInput');
-  const key = input.value.trim();
-
-  if (!key) {
-    showToast('Masukkan API Key terlebih dahulu', 'error');
-    return;
-  }
-
-  try {
-    const res = await apiFetch(`${API}/settings`, {
-      method: 'POST',
-      body: JSON.stringify({ apiKey: key })
-    });
-    showToast(res.message || 'API Key berhasil disimpan!', 'success');
-    input.value = '';
-    closeModal('settingsModal');
-    await checkApiKeyStatus();
-  } catch (err) {
-    showToast('Gagal menyimpan API Key: ' + err.message, 'error');
-  }
-}
-
-function toggleApiKeyVisibility() {
-  const input = document.getElementById('geminiApiKeyInput');
-  const icon = document.getElementById('toggleKeyIcon');
-  if (input.type === 'password') {
-    input.type = 'text';
-    icon.className = 'fas fa-eye-slash';
-  } else {
-    input.type = 'password';
-    icon.className = 'fas fa-eye';
-  }
-}
-
 // ─── Data Loading ─────────────────────────────────────────
 
 async function loadJobs() {
@@ -432,7 +377,7 @@ async function loadStats() {
 
 async function refreshAll() {
   await checkAuthStatus();
-  await Promise.all([loadJobs(), loadStats(), checkApiKeyStatus()]);
+  await Promise.all([loadJobs(), loadStats()]);
 }
 
 // ─── Seed Sample Data ─────────────────────────────────────
