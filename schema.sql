@@ -4,6 +4,12 @@
 -- ========================================================
 
 CREATE DATABASE IF NOT EXISTS job_tracker;
+
+-- Buat user database sesuai slide PPT
+CREATE USER IF NOT EXISTS 'user_job'@'localhost' IDENTIFIED BY 'passwordku';
+GRANT ALL PRIVILEGES ON job_tracker.* TO 'user_job'@'localhost';
+FLUSH PRIVILEGES;
+
 USE job_tracker;
 
 -- 1. Tabel Utama: Daftar Lamaran Kerja
