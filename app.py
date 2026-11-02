@@ -282,9 +282,10 @@ Important Instructions:
 - Do NOT wrap the output in markdown code blocks like ```json. Return raw JSON string only."""
 
 CANDIDATE_MODELS = [
+    'gemini-1.5-flash',
+    'gemini-1.5-flash-8b',
     'gemini-2.5-flash',
-    'gemini-3.8-flash',
-    'gemini-1.5-flash'
+    'gemini-3.8-flash'
 ]
 
 def get_active_api_key():
@@ -312,25 +313,41 @@ def call_gemini_api(contents_payload):
         headers = {"Content-Type": "application/json"}
         payload = {"contents": contents_payload}
 
-        try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=30)
-            if resp.status_code == 200:
-                data = resp.json()
-                text = data['candidates'][0]['content']['parts'][0]['text']
-                cleaned = re.sub(r'```json\n?|```\n?', '', text).strip()
-                return json.loads(cleaned)
-            elif resp.status_code == 404:
-                last_error = f"Model {model_name} tidak ditemukan (404)"
-                continue
-            else:
-                err_body = resp.json()
-                msg = err_body.get('error', {}).get('message', resp.text)
-                raise ValueError(f"Google AI Error ({resp.status_code}): {msg}")
-        except requests.exceptions.RequestException as e:
-            last_error = str(e)
-            continue
+        for attempt in range(2):
+            try:
+                resp = requests.post(url, headers=headers, json=payload, timeout=25)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    text = data['candidates'][0]['content']['parts'][0]['text']
+                    cleaned = re.sub(r'```json\n?|```\n?', '', text).strip()
+                    return json.loads(cleaned)
+                
+                # Check error details
+                msg = resp.text
+                try:
+                    err_json = resp.json().get('error', {})
+                    msg = err_json.get('message', resp.text)
+                except Exception:
+                    pass
+                
+                last_error = f"{model_name} ({resp.status_code}): {msg}"
 
-    raise ValueError(f"Gagal memanggil AI: {last_error}")
+                # If overloaded (503), rate limited (429), or server error (500/502), wait and try next model
+                if resp.status_code in (429, 503, 500, 502, 504):
+                    import time
+                    time.sleep(1)
+                    break  # Move to next candidate model
+                elif resp.status_code == 404:
+                    break  # Model not found, move to next model
+                else:
+                    # Authentication or bad request error
+                    raise ValueError(f"Google AI Error ({resp.status_code}): {msg}")
+
+            except requests.exceptions.RequestException as e:
+                last_error = str(e)
+                continue
+
+    raise ValueError(f"Google AI sedang padat (High Demand). Silakan coba lagi dalam beberapa detik: {last_error}")
 
 # ─── Routes: Web Interface ──────────────────────────────────
 @app.route('/')
