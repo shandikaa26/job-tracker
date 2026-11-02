@@ -1,8 +1,9 @@
 /* ══════════════════════════════════════════════════════════
-   JobTracker — Frontend Application
+   JobTracker — Frontend Application with Multi-User Auth
    ══════════════════════════════════════════════════════════ */
 
 // ─── State ────────────────────────────────────────────────
+let currentUser = null;
 let jobs = [];
 let stats = {};
 let editingJobId = null;
@@ -38,6 +39,7 @@ const KANBAN_COLUMNS = [
 ];
 
 const API = '/api/jobs';
+const AUTH_API = '/api/auth';
 
 // ─── Helper Functions ─────────────────────────────────────
 
@@ -197,11 +199,125 @@ function switchView(view) {
 async function apiFetch(url, options = {}) {
   const res = await fetch(url, {
     headers: { 'Content-Type': 'application/json', ...options.headers },
+    credentials: 'include',
     ...options
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || 'Terjadi kesalahan sistem');
   return data;
+}
+
+// ─── Authentication Management ────────────────────────────
+
+function openAuthModal(mode = 'login') {
+  switchAuthTab(mode);
+  openModal('authModal');
+}
+
+function switchAuthTab(mode) {
+  const tabLogin = document.getElementById('tabAuthLogin');
+  const tabRegister = document.getElementById('tabAuthRegister');
+  const formLogin = document.getElementById('loginForm');
+  const formRegister = document.getElementById('registerForm');
+  const modalTitle = document.getElementById('authModalTitle');
+
+  if (mode === 'login') {
+    tabLogin.classList.add('active');
+    tabRegister.classList.remove('active');
+    formLogin.classList.remove('hidden');
+    formRegister.classList.add('hidden');
+    modalTitle.innerHTML = '<i class="fas fa-sign-in-alt"></i> Masuk ke Akun Anda';
+  } else {
+    tabRegister.classList.add('active');
+    tabLogin.classList.remove('active');
+    formRegister.classList.remove('hidden');
+    formLogin.classList.add('hidden');
+    modalTitle.innerHTML = '<i class="fas fa-user-plus"></i> Daftar Akun Baru';
+  }
+}
+
+async function checkAuthStatus() {
+  try {
+    const res = await apiFetch(`${AUTH_API}/me`);
+    const profileBar = document.getElementById('userProfileBar');
+    const loginBtn = document.getElementById('loginHeaderBtn');
+    const authPrompt = document.getElementById('authPromptBanner');
+
+    if (res.authenticated && res.user) {
+      currentUser = res.user;
+      document.getElementById('userNameLabel').textContent = currentUser.name;
+      document.getElementById('userAvatarBadge').textContent = currentUser.name.charAt(0).toUpperCase();
+
+      profileBar.classList.remove('hidden');
+      loginBtn.classList.add('hidden');
+      authPrompt.classList.add('hidden');
+    } else {
+      currentUser = null;
+      profileBar.classList.add('hidden');
+      loginBtn.classList.remove('hidden');
+      authPrompt.classList.remove('hidden');
+    }
+  } catch (err) {
+    currentUser = null;
+  }
+}
+
+async function handleLoginSubmit(e) {
+  e.preventDefault();
+  const email = document.getElementById('loginEmail').value.trim();
+  const password = document.getElementById('loginPassword').value;
+
+  showLoading('Memverifikasi akun...');
+  try {
+    const res = await apiFetch(`${AUTH_API}/login`, {
+      method: 'POST',
+      body: JSON.stringify({ email, password })
+    });
+    showToast(res.message, 'success');
+    closeModal('authModal');
+    document.getElementById('loginForm').reset();
+    await refreshAll();
+  } catch (err) {
+    showToast(err.message, 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+async function handleRegisterSubmit(e) {
+  e.preventDefault();
+  const name = document.getElementById('regName').value.trim();
+  const email = document.getElementById('regEmail').value.trim();
+  const password = document.getElementById('regPassword').value;
+
+  showLoading('Mendaftarkan akun baru...');
+  try {
+    const res = await apiFetch(`${AUTH_API}/register`, {
+      method: 'POST',
+      body: JSON.stringify({ name, email, password })
+    });
+    showToast(res.message, 'success');
+    closeModal('authModal');
+    document.getElementById('registerForm').reset();
+
+    // Otomatis tawarkan buat sample demo
+    await refreshAll();
+  } catch (err) {
+    showToast(err.message, 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+async function handleLogout() {
+  try {
+    await apiFetch(`${AUTH_API}/logout`, { method: 'POST' });
+    showToast('Anda telah keluar dari akun.', 'info');
+    await refreshAll();
+    openAuthModal('login');
+  } catch (err) {
+    showToast('Gagal logout: ' + err.message, 'error');
+  }
 }
 
 // ─── Settings & API Key ──────────────────────────────────
@@ -235,6 +351,12 @@ async function checkApiKeyStatus() {
 
 async function saveApiKey(e) {
   e.preventDefault();
+  if (!currentUser) {
+    showToast('Silakan login terlebih dahulu untuk menyimpan API Key', 'error');
+    openAuthModal('login');
+    return;
+  }
+
   const input = document.getElementById('geminiApiKeyInput');
   const key = input.value.trim();
 
@@ -272,6 +394,12 @@ function toggleApiKeyVisibility() {
 // ─── Data Loading ─────────────────────────────────────────
 
 async function loadJobs() {
+  if (!currentUser) {
+    jobs = [];
+    renderJobs();
+    return;
+  }
+
   const params = new URLSearchParams();
   const statusFilter = document.getElementById('filterStatus').value;
   const searchValue = document.getElementById('searchInput').value.trim();
@@ -288,6 +416,12 @@ async function loadJobs() {
 }
 
 async function loadStats() {
+  if (!currentUser) {
+    stats = { total: 0, statuses: {}, applied: 0, screening: 0, interview: 0, offering: 0, accepted: 0, rejected: 0 };
+    renderStats();
+    return;
+  }
+
   try {
     stats = await apiFetch(`${API}/stats`);
     renderStats();
@@ -297,13 +431,20 @@ async function loadStats() {
 }
 
 async function refreshAll() {
+  await checkAuthStatus();
   await Promise.all([loadJobs(), loadStats(), checkApiKeyStatus()]);
 }
 
 // ─── Seed Sample Data ─────────────────────────────────────
 
 async function seedSampleData() {
-  showLoading('Memuat 5 contoh lamaran kerja...');
+  if (!currentUser) {
+    showToast('Silakan login terlebih dahulu untuk menambahkan contoh data', 'info');
+    openAuthModal('login');
+    return;
+  }
+
+  showLoading('Memuat 5 contoh lamaran kerja ke akun Anda...');
   try {
     const res = await apiFetch(`${API}/seed`, { method: 'POST' });
     showToast(res.message, 'success');
@@ -538,6 +679,12 @@ async function handleStatusChange(id, newStatus) {
 // ─── Add Job Modal ────────────────────────────────────────
 
 function openAddModal() {
+  if (!currentUser) {
+    showToast('Silakan masuk ke akun Anda terlebih dahulu untuk menambah lamaran', 'info');
+    openAuthModal('login');
+    return;
+  }
+
   editingJobId = null;
   document.getElementById('modalTitle').innerHTML = '<i class="fas fa-plus-circle"></i> Tambah Lamaran Pekerjaan';
   document.getElementById('submitBtnText').textContent = 'Simpan Lamaran';
@@ -675,6 +822,7 @@ async function handleExtractImage() {
     formData.append('image', selectedFile);
     const res = await fetch(`${API}/extract-image`, {
       method: 'POST',
+      credentials: 'include',
       body: formData
     });
     const result = await res.json();

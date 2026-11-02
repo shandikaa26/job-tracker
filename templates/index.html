@@ -25,9 +25,24 @@
         </div>
       </div>
       <div class="header-actions">
+        <!-- Logged in user profile badge -->
+        <div id="userProfileBar" class="user-profile-bar hidden">
+          <span class="user-avatar-badge" id="userAvatarBadge">U</span>
+          <span class="user-name" id="userNameLabel">Nama User</span>
+          <button class="btn btn-sm btn-outline-light" onclick="handleLogout()" title="Keluar dari akun">
+            <i class="fas fa-sign-out-alt"></i> Keluar
+          </button>
+        </div>
+
+        <!-- Login button if not logged in -->
+        <button class="btn btn-outline-light" id="loginHeaderBtn" onclick="openAuthModal('login')">
+          <i class="fas fa-user-circle"></i>
+          <span>Masuk / Daftar</span>
+        </button>
+
         <button class="btn btn-outline-light" id="openSettingsBtn" onclick="openModal('settingsModal')">
           <i class="fas fa-key"></i>
-          <span>API Key Gemini</span>
+          <span>API Key</span>
           <span class="status-indicator" id="apiKeyIndicator" title="Cek status API"></span>
         </button>
       </div>
@@ -36,6 +51,15 @@
 
   <!-- Main Content -->
   <main class="container">
+
+    <!-- Auth Prompt Banner (if not logged in) -->
+    <div id="authPromptBanner" class="api-notice-banner hidden" style="background:#eff6ff;border-color:#bfdbfe;color:#1e40af;">
+      <div class="api-notice-content">
+        <i class="fas fa-user-lock" style="color:#2563eb;"></i>
+        <span><strong>Masuk untuk personalisasi data:</strong> Setiap orang memiliki data lamaran dan progresnya masing-masing. Silakan masuk atau buat akun baru gratis.</span>
+      </div>
+      <button class="btn btn-sm btn-primary" onclick="openAuthModal('login')">Masuk / Daftar</button>
+    </div>
 
     <!-- API Key Notice Banner (Conditional) -->
     <div id="apiKeyBanner" class="api-notice-banner hidden">
@@ -111,6 +135,60 @@
       </div>
     </section>
   </main>
+
+  <!-- ═══════════ Auth Modal (Login / Register) ═══════════ -->
+  <div id="authModal" class="modal-overlay" onclick="handleOverlayClick(event, 'authModal')">
+    <div class="modal modal-sm">
+      <div class="modal-header">
+        <h2 id="authModalTitle"><i class="fas fa-user-lock"></i> Masuk ke Akun</h2>
+        <button class="close-btn" onclick="closeModal('authModal')">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="tabs" id="authTabs">
+          <button class="tab active" id="tabAuthLogin" onclick="switchAuthTab('login')">
+            <i class="fas fa-sign-in-alt"></i> Masuk (Login)
+          </button>
+          <button class="tab" id="tabAuthRegister" onclick="switchAuthTab('register')">
+            <i class="fas fa-user-plus"></i> Buat Akun Baru
+          </button>
+        </div>
+
+        <!-- Login Form -->
+        <form id="loginForm" onsubmit="handleLoginSubmit(event)">
+          <div class="form-group" style="margin-bottom: 0.85rem;">
+            <label><i class="fas fa-envelope"></i> Alamat Email</label>
+            <input type="email" id="loginEmail" required placeholder="nama@email.com">
+          </div>
+          <div class="form-group" style="margin-bottom: 1.25rem;">
+            <label><i class="fas fa-lock"></i> Kata Sandi (Password)</label>
+            <input type="password" id="loginPassword" required placeholder="Masukkan password">
+          </div>
+          <button type="submit" class="btn btn-primary btn-lg" style="width: 100%; justify-content: center;">
+            <i class="fas fa-arrow-right-to-bracket"></i> Masuk Sekarang
+          </button>
+        </form>
+
+        <!-- Register Form -->
+        <form id="registerForm" class="hidden" onsubmit="handleRegisterSubmit(event)">
+          <div class="form-group" style="margin-bottom: 0.85rem;">
+            <label><i class="fas fa-user"></i> Nama Lengkap</label>
+            <input type="text" id="regName" required placeholder="Contoh: Miedya Shandika">
+          </div>
+          <div class="form-group" style="margin-bottom: 0.85rem;">
+            <label><i class="fas fa-envelope"></i> Alamat Email</label>
+            <input type="email" id="regEmail" required placeholder="nama@email.com">
+          </div>
+          <div class="form-group" style="margin-bottom: 1.25rem;">
+            <label><i class="fas fa-lock"></i> Buat Password (Min 6 Karakter)</label>
+            <input type="password" id="regPassword" minlength="6" required placeholder="Minimal 6 karakter">
+          </div>
+          <button type="submit" class="btn btn-primary btn-lg" style="width: 100%; justify-content: center;">
+            <i class="fas fa-user-check"></i> Daftar & Buat Akun
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
 
   <!-- ═══════════ Add / Edit Job Modal ═══════════ -->
   <div id="jobModal" class="modal-overlay" onclick="handleOverlayClick(event, 'jobModal')">
